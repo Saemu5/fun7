@@ -1,48 +1,59 @@
 package com.samod.fun7demo;
 
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 
 public class DbController {
     final private String protocol = "jdbc:derby:";
-    final private static String fun7db = "fun7db;create=true";
+    final private static String dbName = "fun7db";
     Connection conn;
+    PreparedStatement psUpdate;
+    PreparedStatement psGet;
+    PreparedStatement psNew;
 
+    //establishes the connection to database and prepares statements to be used,
+    //checks for existing 'LOGINS' table and creates it if one is not found
     public DbController() throws SQLException{
-        conn = DriverManager.getConnection(protocol + fun7db, null);
 
+        //establish connection to db
+        conn = DriverManager.getConnection(protocol + dbName + ";create=true", null);
+        System.out.println("Connected to Derby database " + dbName);
+
+        //create a table if one is not found
         var checkDb = conn.getMetaData().getTables(null,"APP","LOGINS", new String[] {"TABLE"});
         var exists = false;
         while (checkDb.next()) {
             exists = checkDb.getString("TABLE_NAME").equals("LOGINS") || exists;
         }
         if(!exists){
-            conn.createStatement().execute("CREATE TABLE LOGINS(USERID INT, COUNT INT)");
+            conn.createStatement().execute("CREATE TABLE LOGINS(USERID VARCHAR(40) PRIMARY KEY, COUNT INT)");
+            System.out.println("Logins table created.");
+        } else {
+            System.out.println("Logins table found.");
         }
 
-    }
-
-    public void addNewUser(int userid) throws SQLException{
-        conn.createStatement().executeUpdate(String.format("INSERT INTO LOGINS VALUES (%d, 0)", userid));
-    }
-
-    public void incrementLoginCount(int userid) throws SQLException{
-        PreparedStatement psUpdate;
-        psUpdate = conn.prepareStatement(
-                "UPDATE LOGINS SET COUNT=COUNT+1 WHERE USERID=?");
-
-        psUpdate.setInt(1,userid);
-        psUpdate.executeUpdate();
-
-    }
-
-    public int getLogins(int userid) throws SQLException{
-        ResultSet rs;
-        PreparedStatement psGet;
+        //prepare statements for querying db
+        psNew = conn.prepareStatement("INSERT INTO LOGINS VALUES (?, 0)");
         psGet = conn.prepareStatement("SELECT COUNT FROM LOGINS WHERE USERID=?");
-        psGet.setInt(1, userid);
+        psUpdate = conn.prepareStatement("UPDATE LOGINS SET COUNT=COUNT+1 WHERE USERID=?");
+
+    }
+
+    //adds new user to db
+    public void addNewUser(String userid) throws SQLException{
+        psNew.setString(1, userid);
+        psNew.executeUpdate();
+    }
+
+    //raises user's login count
+    public void incrementLoginCount(String userid) throws SQLException{
+        psUpdate.setString(1,userid);
+        psUpdate.executeUpdate();
+    }
+
+    //returns user's login count or -1 if user is not in db yet
+    public int getLogins(String userid) throws SQLException{
+        ResultSet rs;
+        psGet.setString(1, userid);
         rs = psGet.executeQuery();
         int a = -1;
         while(rs.next()){
@@ -51,9 +62,17 @@ public class DbController {
         return a;
     }
 
+    //closes connection to db and resources
     public void close() {
         try {
             DriverManager.getConnection(protocol + ";shutdown=true");
+            psUpdate.close();
+            psUpdate = null;
+            psNew.close();
+            psNew = null;
+            psGet.close();
+            psGet = null;
+            conn.close();
             conn = null;
         } catch (SQLException se) {
             if (((se.getErrorCode() == 50000)
@@ -66,6 +85,7 @@ public class DbController {
         }
     }
 
+    //prints sql error info
     public static void printSQLException(SQLException e)
     {
         while (e != null)
@@ -74,6 +94,7 @@ public class DbController {
             System.err.println("  SQL State:  " + e.getSQLState());
             System.err.println("  Error Code: " + e.getErrorCode());
             System.err.println("  Message:    " + e.getMessage());
+            e.printStackTrace();
             e = e.getNextException();
         }
     }

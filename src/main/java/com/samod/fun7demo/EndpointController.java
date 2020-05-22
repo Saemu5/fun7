@@ -15,64 +15,101 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 
 @RestController
 public class EndpointController {
-    static final String ext_api_uri = "https://us-central1-o7tools.cloudfunctions.net/fun7-ad-partner";
+    DbController db = Fun7demoApplication.db; //for easier referencing
 
-    @GetMapping("/")
-    public HashMap<String, String> getParams(@RequestParam(value="timezone") String timezone,
+    //modifiable parameters
+    final String allowedCountry = "US";
+    final int allowedLoginCount = 5;
+    final int [] supportHours = new int[]{9,15};
+    final String supportCity = "Europe/Ljubljana";
+    final String ext_api_uri = "https://us-central1-o7tools.cloudfunctions.net/fun7-ad-partner";
+    final String ext_api_login = Base64.getEncoder().encodeToString(("fun7user:fun7pass").getBytes());
+
+    @GetMapping("/") //handles request input and output, returned map is pushed straight to output in json form
+    public HashMap<String, String> processRequest(@RequestParam(value="timezone") String timezone,
                              @RequestParam(value="userID") String userID,
-                             @RequestParam(value="cc") String cc) {
+                             @RequestParam(value="cc") String countryCode) {
 
 
-        var reply = new HashMap<String, String>();
+        var output = new HashMap<String, String>(); //output map to be populated
+
+        //check for proper input, return error otherwise
+        if (userID.length() > 40 || userID.length() < 1 || !Arrays.asList(Locale.getISOCountries()).contains(countryCode)){
+            return makeErrorMap("400", "Bad Request");
+        }
 
         try {
-            var db = Fun7demoApplication.db;
+            //check for user's login count in db
+            int loginCount = db.getLogins(userID);
 
-            int id = Integer.parseInt(userID);
-            int loginCount = db.getLogins(id);
-            System.out.println("input: " + userID + " " + cc + " " + loginCount);
+            //if not existent, add new user to db
+            if (loginCount == -1){ db.addNewUser(userID); }
 
-            if (loginCount == -1){
-                db.addNewUser(id);
-            }
-            db.incrementLoginCount(id);
+            //add current session to login count
+            db.incrementLoginCount(userID);
 
-            reply.put("multiplayer", (loginCount >= 5) && cc.equals("840") ? "enabled" : "disabled");
+            System.out.println("input: user: " + userID + " cc: " + countryCode + " login count: " + loginCount); //verbose print
 
-            ZonedDateTime ljTime = ZonedDateTime.now(ZoneId.of("Europe/Ljubljana"));
-            reply.put("user-support", ljTime.getHour() >= 9 && ljTime.getHour() < 15 ? "enabled" : "disabled");
+            //set multiplayer access based on country code and login count
+            output.put("multiplayer",(loginCount >= allowedLoginCount) && countryCode.equals(allowedCountry)
+                    ? "enabled" : "disabled");
 
+            //set user-support availability according to support's local time
+            ZonedDateTime localTime = ZonedDateTime.now(ZoneId.of(supportCity));
+            output.put("user-support",
+                    localTime.getHour() >= supportHours[0] && localTime.getHour() < supportHours[1]
+                            ? "enabled" : "disabled");
+
+            //connect to external api to check for ads availability
             var client = HttpClient.newHttpClient();
-            String login = Base64.getEncoder().encodeToString(("fun7user:fun7pass").getBytes());
             var request = HttpRequest.newBuilder()
-                    .uri(URI.create(ext_api_uri + "?countryCode=" + "840"))
+                    .uri(URI.create(ext_api_uri + "?countryCode=" + countryCode))
                     .timeout(Duration.ofSeconds(20))
-                    .header("Authorization", "Basic " + login)
+                    .header("Authorization", "Basic " + ext_api_login)
                     .GET()
                     .build();
 
+            //try sending request to external API and reading response
+            //TODO: async?
             try {
                 var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                //request handler likes to crash so try resending request until properly processed (usually once)
                 while (response.body().endsWith("seppuku!")) {
                     response = client.send(request, HttpResponse.BodyHandlers.ofString());
                 }
+                //read response and set ad availability
                 var map = new ObjectMapper().readValue(response.body(),
                         new TypeReference<Map<String, String>>() {});
-                reply.put("ads", map.get("ads").startsWith("sure") ? "enabled" : "disabled");
-            } catch (Exception e) {
+                output.put("ads", map.get("ads").startsWith("sure")
+                        ? "enabled" : "disabled");
+
+            } catch (Exception e) { //handle request/response errors
                 e.printStackTrace();
+                return makeErrorMap("500", "Internal Server Error");
             }
-        } catch (SQLException e){
+
+        } catch (SQLException e){ //handle db errors
             DbController.printSQLException(e);
+            return makeErrorMap("500", "Internal Server Error");
         }
-        return reply;
+
+        System.out.println(String.format("output: ads: %s, multiplayer: %s, user-support: %s",
+                output.get("ads"), output.get("multiplayer"), output.get("user-support"))); //verbose print
+
+        return output;
+    }
+
+    HashMap<String, String> makeErrorMap(String errCode, String errMsg){
+        var map = new HashMap<String, String>();
+        map.put("error", errCode);
+        map.put("message", errMsg);
+        map.put("code", errCode);
+        return map;
     }
 }
 

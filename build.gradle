@@ -14,10 +14,10 @@ repositories {
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-web'
+	runtimeOnly 'org.apache.derby:derby'
 	testImplementation('org.springframework.boot:spring-boot-starter-test') {
 		exclude group: 'org.junit.vintage', module: 'junit-vintage-engine'
 	}
-	compile group: 'org.apache.derby', name: 'derby', version: '10.15.2.0'
 }
 
 test {
